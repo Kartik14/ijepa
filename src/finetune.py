@@ -23,8 +23,9 @@ def create_dataloaders(crop_size, batch_size, num_workers):
 
     # Ref https://github.com/facebookresearch/ijepa/blob/main/src/transforms.py
     # No horizontal_flip, color_distortion, gaussian_blur
-    cifar100_mean = (0.5071, 0.4867, 0.4408)
-    cifar100_std = (0.2675, 0.2565, 0.2761)
+    # cifar100_mean = (0.5071, 0.4867, 0.4408)
+    # cifar100_std = (0.2675, 0.2565, 0.2761)
+    cifar100_mean, cifar100_std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
     # According to paper, resize image to 224x224 to match with pretraining size of IJEPA
     crop_scale = (0.3, 1.0)
     transform_train = torchvision.transforms.Compose(
@@ -126,7 +127,7 @@ def main():
     and sweep three different reference learning rates [0.01, 0.05, 0.001], and two weight decay values [0.0005, 0.0]."
     """
     # -- define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=0.0005)
 
     # -- define lr scheduler
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
