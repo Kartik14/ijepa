@@ -164,6 +164,11 @@ def main():
         # -- step lr
         lr_scheduler.step()
 
+    # -- save model
+    w_file = "./weights/linear_probe.pth"
+    torch.save(model.state_dict(), w_file)
+    logging.info(f"Saved weights to {w_file}")
+
 
 if __name__ == "__main__":
     main()
