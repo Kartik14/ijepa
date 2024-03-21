@@ -126,9 +126,7 @@ def main():
     and sweep three different reference learning rates [0.01, 0.05, 0.001], and two weight decay values [0.0005, 0.0]."
     """
     # -- define optimizer
-    optimizer = torch.optim.Adam(
-        model.linear_probe.parameters(), lr=0.001, weight_decay=0.0005
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0005)
 
     # -- define lr scheduler
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
