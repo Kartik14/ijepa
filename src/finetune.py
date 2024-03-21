@@ -1,5 +1,6 @@
 """This script is used to fine-tune the IJEPA model on the CIFAR10 dataset using Linear Probing."""
 
+import os
 import sys
 import logging
 
@@ -94,13 +95,34 @@ def main():
     else:
         device = torch.device("cuda")
 
-    # --
+    # -- meta
     r_file = "./weights/target_encoder.pth"
     model_name = "vit_huge"
     patch_size = 14
     crop_size = 224
     num_classes = 100
+
+    # -- optim params
+    init_lr = 0.005
+    weight_decay = 0.0005
+    lr_scheduler_step_size = 15
+    lr_scheduler_gamma = 0.1
     num_epochs = 50
+    save_dir = "./output/"
+    os.makedirs(save_dir, exist_ok=True)
+
+    # -- save config
+    with open(f"{save_dir}/config.txt", "w") as f:
+        f.write(f"Model: {model_name}\n")
+        f.write(f"Patch Size: {patch_size}\n")
+        f.write(f"Crop Size: {crop_size}\n")
+        f.write(f"Num Classes: {num_classes}\n")
+        f.write(f"Init LR: {init_lr}\n")
+        f.write(f"Weight Decay: {weight_decay}\n")
+        f.write(f"LR Scheduler Step Size: {lr_scheduler_step_size}\n")
+        f.write(f"LR Scheduler Gamma: {lr_scheduler_gamma}\n")
+        f.write(f"Num Epochs: {num_epochs}\n")
+        f.write(f"Save Dir: {save_dir}\n")
 
     # -- create dataloaders
     train_loader, test_loader = create_dataloaders(
@@ -127,10 +149,14 @@ def main():
     and sweep three different reference learning rates [0.01, 0.05, 0.001], and two weight decay values [0.0005, 0.0]."
     """
     # -- define optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=0.0005)
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=init_lr, weight_decay=weight_decay
+    )
 
     # -- define lr scheduler
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma
+    )
 
     for epoch in range(num_epochs):
         # -- train
@@ -165,7 +191,7 @@ def main():
         lr_scheduler.step()
 
     # -- save model
-    w_file = "./weights/linear_probe.pth"
+    w_file = f"{save_dir}/linear_probe_{epoch}.pth"
     torch.save(model.state_dict(), w_file)
     logging.info(f"Saved weights to {w_file}")
 
