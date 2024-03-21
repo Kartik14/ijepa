@@ -14,7 +14,7 @@ import torch
 import torchvision
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from src.models import vision_transformer as vit
 
@@ -101,6 +101,7 @@ def main():
     patch_size = 14
     crop_size = 224
     num_classes = 100
+    batch_size = 128
 
     # -- optim params
     init_lr = 0.005
@@ -123,14 +124,17 @@ def main():
         f.write(f"LR Scheduler Gamma: {lr_scheduler_gamma}\n")
         f.write(f"Num Epochs: {num_epochs}\n")
         f.write(f"Save Dir: {save_dir}\n")
+        f.write(f"batch_size: {batch_size}\n")
 
     # -- create dataloaders
     train_loader, test_loader = create_dataloaders(
-        crop_size, batch_size=48, num_workers=4
+        crop_size, batch_size=batch_size, num_workers=4
     )
 
     # -- define model
-    model = IJEPALinearProbe(model_name, patch_size, crop_size, num_classes).to(device)
+    model = DDP(
+        IJEPALinearProbe(model_name, patch_size, crop_size, num_classes).to(device)
+    )
     logging.info(f"Model: \n{model}")
 
     # -- load weights
