@@ -81,13 +81,16 @@ class IJEPALinearProbe(torch.nn.Module):
         )  # B x N x D
         # average pool the N patches to get a single feature vector of shape B x D
         self.avg_pool = torch.nn.AdaptiveAvgPool1d(1)
-        self.linear_probe = torch.nn.Linear(self.target_encoder.embed_dim, num_classes)
+        self.bn = torch.nn.BatchNorm1d(4 * self.target_encoder.embed_dim)
+        self.linear_probe = torch.nn.Linear(
+            4 * self.target_encoder.embed_dim, num_classes
+        )
 
     def forward(self, x):
-        x = self.target_encoder(x)  # B x N x D
-        x = x.transpose(-1, -2)  # B x D x N
-        x = self.avg_pool(x).squeeze(-1)  # B x D
-        x = self.linear_probe(x)
+        _, x = self.target_encoder(x)  # B x N x 4D
+        x = x.transpose(-1, -2)  # B x 4D x N
+        x = self.avg_pool(x).squeeze(-1)  # B x 4D
+        x = self.linear_probe(self.bn(x))
         return x
 
 
@@ -114,12 +117,10 @@ def main():
     batch_size = 256
 
     # -- optim params
-    init_lr = 0.005
+    init_lr = 0.01
     weight_decay = 0.0005
-    lr_scheduler_step_size = 15
-    lr_scheduler_gamma = 0.1
-    num_epochs = 50
-    save_dir = "./output/cifar100_linear_probe"
+    num_epochs = 5
+    save_dir = "./output/cifar100_linear_probe_4_bn"
     os.makedirs(save_dir, exist_ok=True)
 
     # -- save config
@@ -130,8 +131,6 @@ def main():
         f.write(f"Num Classes: {num_classes}\n")
         f.write(f"Init LR: {init_lr}\n")
         f.write(f"Weight Decay: {weight_decay}\n")
-        f.write(f"LR Scheduler Step Size: {lr_scheduler_step_size}\n")
-        f.write(f"LR Scheduler Gamma: {lr_scheduler_gamma}\n")
         f.write(f"Num Epochs: {num_epochs}\n")
         f.write(f"Save Dir: {save_dir}\n")
         f.write(f"batch_size: {batch_size}\n")
@@ -169,8 +168,8 @@ def main():
     )
 
     # -- define lr scheduler
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=lr_scheduler_step_size, gamma=lr_scheduler_gamma
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer=optimizer, T_0=len(train_loader), T_mult=1, eta_min=0.0001
     )
 
     for epoch in range(num_epochs):
@@ -183,6 +182,7 @@ def main():
             loss = torch.nn.CrossEntropyLoss()(y_hat, y)
             loss.backward()
             optimizer.step()
+            lr_scheduler.step(epoch + i / len(train_loader))
             if i % 10 == 0 or i == len(train_loader) - 1:
                 logging.info(
                     f"Epoch {epoch}/{num_epochs} | Iter {i}/{len(train_loader)} | Train Loss: {loss.item()}"
@@ -202,11 +202,7 @@ def main():
             accuracy = 100 * correct / total
             logging.info(f"Epoch {epoch} | Test Accuracy: {accuracy}")
 
-        # -- step lr
-        lr_scheduler.step()
-
         # -- save model, optimizer, lr_scheduler for rank 0
-        accuracy = 0
         if rank == 0:
             checkpoint = {
                 "model_state_dict": model.module.state_dict(),
@@ -214,19 +210,6 @@ def main():
                 "lr_scheduler_state_dict": lr_scheduler.state_dict(),
                 "epoch": epoch,
                 "accuracy": accuracy,
-                "config": {
-                    "model_name": model_name,
-                    "patch_size": patch_size,
-                    "crop_size": crop_size,
-                    "num_classes": num_classes,
-                    "init_lr": init_lr,
-                    "weight_decay": weight_decay,
-                    "lr_scheduler_step_size": lr_scheduler_step_size,
-                    "lr_scheduler_gamma": lr_scheduler_gamma,
-                    "num_epochs": num_epochs,
-                    "save_dir": save_dir,
-                    "batch_size": batch_size,
-                },
             }
             w_file = f"{save_dir}/checkpoint_{epoch}.pth"
             torch.save(checkpoint, w_file)

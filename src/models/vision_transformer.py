@@ -509,14 +509,17 @@ class VisionTransformer(nn.Module):
         if masks is not None:
             x = apply_masks(x, masks)
 
+        x_last4 = []
         # -- fwd prop
         for i, blk in enumerate(self.blocks):
             x = blk(x)
+            if i >= len(self.blocks) - 4:
+                x_last4.append(x)
 
         if self.norm is not None:
             x = self.norm(x)
 
-        return x
+        return x, torch.cat(x_last4, dim=-1)  # [B, N, D], [B, N, 4*D]
 
     def interpolate_pos_encoding(self, x, pos_embed):
         npatch = x.shape[1] - 1
