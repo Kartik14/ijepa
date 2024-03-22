@@ -5,7 +5,7 @@ import yaml
 
 from src.finetune import main as app_main
 from src.utils.distributed import init_distributed
-from src.train import main as app_main
+from src.finetune import main as app_main
 
 parser = argparse.ArgumentParser()
 # parser.add_argument(

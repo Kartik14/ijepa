@@ -3,6 +3,7 @@
 import os
 import sys
 import logging
+from tqdm import tqdm
 
 # logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.basicConfig(
@@ -17,6 +18,7 @@ from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from src.models import vision_transformer as vit
+from src.utils.distributed import init_distributed
 
 
 def create_dataloaders(crop_size, batch_size, num_workers):
@@ -38,6 +40,7 @@ def create_dataloaders(crop_size, batch_size, num_workers):
     )
     transform_test = transforms.Compose(
         [
+            transforms.Resize(crop_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=cifar100_mean, std=cifar100_std),
         ]
@@ -89,6 +92,13 @@ class IJEPALinearProbe(torch.nn.Module):
 
 
 def main():
+
+    # -- init torch distributed backend
+    world_size, rank = init_distributed()
+    logger.info(f"Initialized (rank/world-size) {rank}/{world_size}")
+    if rank > 0:
+        logger.setLevel(logging.ERROR)
+
     # -- define config
     if not torch.cuda.is_available():
         device = torch.device("cpu")
@@ -101,7 +111,7 @@ def main():
     patch_size = 14
     crop_size = 224
     num_classes = 100
-    batch_size = 128
+    batch_size = 256
 
     # -- optim params
     init_lr = 0.005
@@ -109,7 +119,7 @@ def main():
     lr_scheduler_step_size = 15
     lr_scheduler_gamma = 0.1
     num_epochs = 50
-    save_dir = "./output/"
+    save_dir = "./output/cifar100_linear_probe"
     os.makedirs(save_dir, exist_ok=True)
 
     # -- save config
@@ -133,7 +143,8 @@ def main():
 
     # -- define model
     model = DDP(
-        IJEPALinearProbe(model_name, patch_size, crop_size, num_classes).to(device)
+        IJEPALinearProbe(model_name, patch_size, crop_size, num_classes).to(device),
+        find_unused_parameters=True,
     )
     logging.info(f"Model: \n{model}")
 
@@ -142,11 +153,11 @@ def main():
     updated_checkpoint = {}
     for k, v in checkpoint.items():
         updated_checkpoint[k.replace("module.", "")] = v
-    model.target_encoder.load_state_dict(updated_checkpoint)
+    model.module.target_encoder.load_state_dict(updated_checkpoint)
     logging.info(f"Loaded weights from {r_file}")
 
     # -- freeze the target_encoder
-    for param in model.target_encoder.parameters():
+    for param in model.module.target_encoder.parameters():
         param.requires_grad = False
 
     """From paper: We use a learning rate with a step-wise decay, dividing it by a factor of 10 every 15 epochs, 
@@ -172,17 +183,17 @@ def main():
             loss = torch.nn.CrossEntropyLoss()(y_hat, y)
             loss.backward()
             optimizer.step()
-            if i % 10 == 0:
+            if i % 10 == 0 or i == len(train_loader) - 1:
                 logging.info(
                     f"Epoch {epoch}/{num_epochs} | Iter {i}/{len(train_loader)} | Train Loss: {loss.item()}"
                 )
 
-        # -- validate
+        # --validate
         model.eval()
         with torch.no_grad():
             correct = 0
             total = 0
-            for i, (x, y) in enumerate(test_loader):
+            for i, (x, y) in tqdm(enumerate(test_loader), total=len(test_loader)):
                 x, y = x.to(device), y.to(device)
                 y_hat = model(x)
                 _, predicted = torch.max(y_hat, 1)
@@ -194,10 +205,32 @@ def main():
         # -- step lr
         lr_scheduler.step()
 
-    # -- save model
-    w_file = f"{save_dir}/linear_probe_{epoch}.pth"
-    torch.save(model.state_dict(), w_file)
-    logging.info(f"Saved weights to {w_file}")
+        # -- save model, optimizer, lr_scheduler for rank 0
+        accuracy = 0
+        if rank == 0:
+            checkpoint = {
+                "model_state_dict": model.module.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "lr_scheduler_state_dict": lr_scheduler.state_dict(),
+                "epoch": epoch,
+                "accuracy": accuracy,
+                "config": {
+                    "model_name": model_name,
+                    "patch_size": patch_size,
+                    "crop_size": crop_size,
+                    "num_classes": num_classes,
+                    "init_lr": init_lr,
+                    "weight_decay": weight_decay,
+                    "lr_scheduler_step_size": lr_scheduler_step_size,
+                    "lr_scheduler_gamma": lr_scheduler_gamma,
+                    "num_epochs": num_epochs,
+                    "save_dir": save_dir,
+                    "batch_size": batch_size,
+                },
+            }
+            w_file = f"{save_dir}/checkpoint_{epoch}.pth"
+            torch.save(checkpoint, w_file)
+            logging.info(f"Saved checkpoint to {w_file}")
 
 
 if __name__ == "__main__":
