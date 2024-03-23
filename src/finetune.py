@@ -3,7 +3,9 @@
 import os
 import sys
 import logging
+import argparse
 from tqdm import tqdm
+import yaml
 
 # logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.basicConfig(
@@ -94,7 +96,7 @@ class IJEPALinearProbe(torch.nn.Module):
         return x
 
 
-def main():
+def main(params):
 
     # -- init torch distributed backend
     world_size, rank = init_distributed()
@@ -109,31 +111,24 @@ def main():
         device = torch.device("cuda")
 
     # -- meta
-    r_file = "./weights/target_encoder.pth"
-    model_name = "vit_huge"
-    patch_size = 14
-    crop_size = 224
-    num_classes = 100
-    batch_size = 256
+    r_file = params["r_file"]
+    model_name = params["model_name"]
+    patch_size = params["patch_size"]
+    crop_size = params["crop_size"]
+    num_classes = params["num_classes"]
+    batch_size = params["batch_size"]
 
     # -- optim params
-    init_lr = 0.01
-    weight_decay = 0.0005
-    num_epochs = 5
-    save_dir = "./output/cifar100_linear_probe_4_bn"
+    init_lr = params["init_lr"]
+    weight_decay = params["weight_decay"]
+    num_epochs = params["num_epochs"]
+    save_dir = params["save_dir"]
+    resume_training = params["resume_training"]
     os.makedirs(save_dir, exist_ok=True)
 
     # -- save config
     with open(f"{save_dir}/config.txt", "w") as f:
-        f.write(f"Model: {model_name}\n")
-        f.write(f"Patch Size: {patch_size}\n")
-        f.write(f"Crop Size: {crop_size}\n")
-        f.write(f"Num Classes: {num_classes}\n")
-        f.write(f"Init LR: {init_lr}\n")
-        f.write(f"Weight Decay: {weight_decay}\n")
-        f.write(f"Num Epochs: {num_epochs}\n")
-        f.write(f"Save Dir: {save_dir}\n")
-        f.write(f"batch_size: {batch_size}\n")
+        yaml.dump(params, f)
 
     # -- create dataloaders
     train_loader, test_loader = create_dataloaders(
@@ -146,14 +141,6 @@ def main():
         find_unused_parameters=True,
     )
     logging.info(f"Model: \n{model}")
-
-    # -- load weights
-    checkpoint = torch.load(r_file, map_location=device)
-    updated_checkpoint = {}
-    for k, v in checkpoint.items():
-        updated_checkpoint[k.replace("module.", "")] = v
-    model.module.target_encoder.load_state_dict(updated_checkpoint)
-    logging.info(f"Loaded weights from {r_file}")
 
     # -- freeze the target_encoder
     for param in model.module.target_encoder.parameters():
@@ -172,7 +159,30 @@ def main():
         optimizer=optimizer, T_0=len(train_loader), T_mult=1, eta_min=0.0001
     )
 
-    for epoch in range(num_epochs):
+    if resume_training:
+        # -- load checkpoint, epoch num, opt and scheduler states
+        # get latest checkpoint in save_dir with highest epoch number
+        latest_checkpoint = max(
+            [f for f in os.listdir(save_dir) if f.startswith("checkpoint")],
+            key=lambda x: int(x.split("_")[1].split(".")[0]),
+        )
+        checkpoint = torch.load(f"{save_dir}/{latest_checkpoint}", map_location=device)
+        model.module.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        lr_scheduler.load_state_dict(checkpoint["lr_scheduler_state_dict"])
+        start_epoch = checkpoint["epoch"] + 1
+        logging.info(f"Resumed training from epoch {start_epoch}")
+    else:
+        # -- load weights
+        checkpoint = torch.load(r_file, map_location=device)
+        updated_checkpoint = {}
+        for k, v in checkpoint.items():
+            updated_checkpoint[k.replace("module.", "")] = v
+        model.module.target_encoder.load_state_dict(updated_checkpoint)
+        start_epoch = 0
+        logging.info(f"Loaded weights from {r_file}")
+
+    for epoch in range(start_epoch, num_epochs):
         # -- train
         model.train()
         for i, (x, y) in enumerate(train_loader):
@@ -217,4 +227,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Fine-tune IJEPA model on CIFAR10 dataset using Linear Probing"
+    )
+    parser.add_argument(
+        "--config", type=str, default="config.txt", help="Path to the config file"
+    )
+    args = parser.parse_args()
+    main(args)
